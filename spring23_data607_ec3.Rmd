@@ -1,0 +1,307 @@
+---
+title: "Israel COVID Extra Credit 3"
+author: "Kayleah Griffen"
+date: "3/7/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The objective of this assignment is to use the provided COVID data on Israel's vaccinated and non-vaccinated residents and answer the following questions:
+
+(1) Do you have enough information to calculate the total population?  What does this total population represent?	
+(2) Calculate the Efficacy vs. Disease; Explain your results.					
+(3) From your calculation of efficacy vs. disease, are you able to compare the rate of severe cases in unvaccinated individuals to that in vaccinated individuals?					
+
+## Method by Hand
+
+To begin, load the required packages.
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(rio)
+library(httr)
+library(stringr)
+
+```
+
+Read in the provided csv file.
+
+```{r, message=FALSE}
+# Learned how to read in excel file from github from:
+# https://community.rstudio.com/t/read-xlsx-from-github/9386/7
+
+github_link <- "https://github.com/acatlin/data/blob/master/israeli_vaccination_data_analysis_start.xlsx?raw=true"
+temp_file <- tempfile(fileext = ".xlsx")
+req <- GET(github_link, 
+          # write result to disk
+          write_disk(path = temp_file))
+
+# path <- "C:/Users/kgriffen/OneDrive - Globalfoundries/Documents/Data_science/israel_vax.xlsx"
+df <- import(temp_file)
+kable(head(df,5))  |>
+  kable_styling("striped")
+```
+
+Start by interpreting the table. There is a column titled `population %` that is divided further into two columns - `not vax` and `fully vax`. Then there are rows for the raw number and the percent of the population that the raw number represents. There are two row groups - under 50 and over 50. The first objective is to calculate the total population and state what that represents. The total population would be the sum of the population under 50 and the population over 50. 
+
+To start, get the total population for under 50 and over 50. This can be done by summing the `not vax` and `fully vax` raw numbers and dividing by the sum of the percent of the population that represents. 
+
+```{r}
+n<-2
+less_equal_50 <- (as.double(df$`Population %`[n]) + as.double(df$...3[n]))/
+            (as.double(df$`Population %`[n+1]) + as.double(df$...3[n+1]))
+
+greater_50 <- (as.double(df$`Population %`[n+2]) + as.double(df$...3[n+2]))/
+            (as.double(df$`Population %`[n+3]) + as.double(df$...3[n+3]))
+```
+
+Now sum the numbers.
+
+```{r}
+total_pop <- less_equal_50 + greater_50
+total_pop
+```
+
+The total population is 7,155,090. I checked Israel's actual population in 2021 and it was 9,449,000 residents in December 2021 (https://www.cbs.gov.il/he/mediarelease/DocLib/2021/447/11_21_447e.pdf).
+
+Check the difference
+
+```{r}
+9449000 - total_pop 
+```
+That is a difference of 2,293,910. Looking into this difference - in September 2021 the vaccine had not yet been approved for children under 11 years old. I looked into the population of children under 11 years old in 2021 (https://www.statista.com/statistics/1286953/total-population-of-israel-by-age-group/).
+
+```{r}
+pop_under_4 <- 915200
+pop_5_9 <- 890200
+pop_10_14 <- 815700
+pop_10_11 <- pop_10_14/4
+
+pop_under_11 <- pop_under_4+pop_5_9+pop_10_11
+pop_under_11
+```
+
+For the population under 11 I got 2,009,325. This is about the difference I got between Israels reported population and the population I calculated from the table provided. This leads me to conclude that the populations reported in the table are actually representing just the population that was eligible to receive the vaccine. So the two groups would actually be 11-50 and over 50. Also to note - the total percentage reported for 11-50 was 96% and over 50 was 98% - so for some reason a small percentage was neither not vaccinated or fully vaccinated I would think that this may be people in the process of becoming vaccinated - but that does seem rather small. 
+
+The next step is to calculate the vaccine efficacy. The efficacy is:
+
+1 - (% fully vaxed severe cases per 100K / % not vaxed severe cases per 100K)
+
+This is described as 1 - the relative risk. To calculate the relative risk first you need to calculate the percent of severe cases for the fully vaccinated group and the percent of severe cases for the un-vaccinated group.
+
+In the table provided - the `population %` columns give the `not vax` and `fully vax` as raw total numbers and as percentages of the population that they represent. The `Severe cases` columns give the `not vax` and `full vax` per 100,000 people. In my mind - the easiest way to calculate the % of severe cases for vaccinated and unvaccinated is to just scale up the severe cases per 100,000 to be raw totals of the population.
+
+```{r}
+sev_notvax_total_below50 <- as.integer(df$`Severe Cases`[2])*less_equal_50/
+                            100000
+sev_vax_total_below50 <-as.integer(df$...5[2])*less_equal_50/
+                            100000
+
+sev_notvax_total_50above <- as.integer(df$`Severe Cases`[4])*greater_50/
+                            100000
+sev_vax_total_50above <-as.integer(df$...5[4])*greater_50/
+                            100000
+```
+
+Now actually calculate the efficacy against severe disease for each group.
+
+```{r}
+efficacy_below50 <- 1 - (sev_vax_total_below50/ 
+                          as.integer(df$...3[2]))/
+                        (sev_notvax_total_below50/
+                           as.integer(df$`Population %`[2]))
+
+efficacy_50above <- 1 - (sev_vax_total_50above/ 
+                          as.integer(df$...3[4]))/
+                        (sev_notvax_total_50above/
+                           as.integer(df$`Population %`[4]))
+efficacy_below50
+efficacy_50above
+```
+
+The efficacy for ages 50 and below is about 92% and the efficacy for ages above 50 is about 85%.
+
+## Method with Tidying and Transforming
+
+Looking back now, if I wanted to do some tidying to get the values to do these calculations into a dataframe, I would want my dataframe to be set up like the following:
+
+- age_group
+- vax_status
+- population_count
+- severe_cases_count
+
+First rename columns 
+```{r}
+temp <- ""
+for (i in 1:length(df)){
+  if (str_starts(colnames(df)[i], "[a-zA-Z]")){
+    temp <- colnames(df)[i]
+  }
+  colnames(df)[i] <- paste(temp, df[[i]][1] ,sep = ',')
+}
+
+```
+
+Now remove the first row which does not have relevant information anymore and the last ten rows which contain text information but no relevant data.
+
+```{r}
+df <- df[-1,]
+df <- head(df, - 10) 
+```
+
+Now fill in the ages column. 
+
+```{r}
+temp <- ""
+for (i in 1:dim(df)[1]){
+  if (is.na(df[[1]][i]) == FALSE){
+    temp <- df[[1]][i]
+  } else {
+    df[[1]][i] <- temp
+  }
+}
+```
+
+Now cast all number values as doubles.
+
+```{r}
+for (i in 2:length(df)){
+  df[[i]] <- as.double(df[[i]])
+}
+```
+
+Now take a look at the dataframe.
+
+```{r}
+kable(head(df))  |>
+  kable_styling("striped")
+```
+
+
+First break up the data into 3 dataframes. One for the counts of vaccinated and unvaccinated individuals, one for the percentages of vaccinated and unvaccinated individuals, and one for the severe case counts per 100,000.
+
+```{r}
+df_sub <- df[1:3]
+row_odd <- seq_len(nrow(df)) %% 2
+
+df_counts <- df_sub[row_odd == 1,]
+df_percents <- df_sub[row_odd == 0,]
+
+df_sub <- df[c(1,4:5)]
+df_severe <- df_sub[row_odd == 1,]
+
+```
+
+
+Now get the raw number for the severe cases - rather than cases per 100,000. To do this we need to know the population for under 50 and over 50. Then we can 
+simply multiple the severe case count times the population to get teh actual raw case count. There are a few ways to get the total population based on the numbers given. I will just base the total population on the counts reported for fully vaccinated and their percentages. 
+
+```{r}
+df_pops <- df_counts[[3]]/df_percents[[3]]
+sum(df_pops)
+```
+You can see that the total population count here is close to the count from earlier - 7,155,090 - even though it was calculated differently.
+
+Now - use these counts to calculate the counts of severe cases.
+
+
+```{r}
+df_raw_severe <- df_severe
+
+for (i in 2:length(df_raw_severe)){
+  for (ii in 1:dim(df_raw_severe)[1]){
+    df_raw_severe[[i]][ii] <- df_raw_severe[[i]][ii]*df_pops[ii]/100000
+  }
+}
+```
+
+
+Now pivot the `df_counts` and `df_raw_severe` and bring them together into one dataframe with all of the information.
+
+```{r}
+df_cp <- df_counts |> pivot_longer(
+  cols = !(c(1)),
+  names_to = c("count_type", "vax"),
+  names_sep = ",",
+  values_to = "count_group"
+)
+
+df_sp <- df_raw_severe |> pivot_longer(
+  cols = !(c(1)),
+  names_to = c("count_type", "vax"),
+  names_sep = ",",
+  values_to = "count_group"
+)
+
+df_a <- rbind(df_cp, df_sp)
+
+```
+
+Now clean up the column names and column values.
+
+```{r}
+df_a$count_type <- str_replace(df_a$count_type, "Population %", "Population")
+
+for (i in 1:dim(df_a)[1]){
+  if (str_detect(df_a$vax[i], "Fully")){
+    df_a$vax[i] <- "Vaxed"
+  } else {
+    df_a$vax[i] <- "Un-vaxed"
+  }
+}
+
+df_a <- df_a |> 
+  rename(
+    age = `Age,NA`
+    )
+```
+
+Now pivot wider so that the count_types are columns.
+
+```{r}
+df_w <- df_a |>
+  pivot_wider(names_from = count_type,
+              values_from = count_group
+  )
+kable(df_w)  |>
+  kable_styling("striped")
+```
+
+
+Now calculate the percent of severe cases for each group.
+
+```{r}
+df_w <- df_w |> mutate(percent_severe = `Severe Cases`/Population)
+```
+
+Now calculate the efficacy.
+
+```{r}
+df_uv <- df_w |> group_by(age) |> filter(vax == "Un-vaxed")
+
+df_v <- df_w |> group_by(age) |> filter(vax == "Vaxed")
+
+efficacy <- 1 - df_v$percent_severe/df_uv$percent_severe
+
+df_efficacy <- cbind(df_v, efficacy=efficacy)
+kable(df_efficacy)  |>
+  kable_styling("striped")
+```
+
+The same conclusion was reached as before. The efficacy for ages 50 and below is about 92% and the efficacy for ages above 50 is about 85%.	
+
+## Conclusion
+
+In summary:
+
+(1) The table provided did give enough information to calculate the total population, with the caveat that it represents the population that was eligible to receive the vaccine at the time - which was those over the age of 11. 
+
+(2) The Efficacy vs. Disease was calculated. The results indicate that the efficacy for ages 50 and below is about 92% and the efficacy for ages above 50 is about 85%.			
+
+(3) From my calculation of efficacy vs. disease, the rate of severe cases in unvaccinated individuals and vaccinated individuals can be compared. If you just wanted to look at that ratio of severe cases in unvaccinated to severe cases in vaccinated you would simply take the calculated number for efficacy vs. disease, add 1 and take the inverse. 
